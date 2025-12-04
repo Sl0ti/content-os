@@ -4,11 +4,10 @@ import {
   ArrowRight, RotateCcw, Youtube, BarChart2, Save, Layout, 
   ChevronRight, Settings, Plus, Trash2, ExternalLink, Menu, X,
   Library, Home, Activity, Sparkles, Brain, Loader, Lightbulb, Info,
-  TrendingUp, Target, Eye, MousePointer, Users
+  TrendingUp, Target, Eye, MousePointer
 } from 'lucide-react';
 
 // --- API CONFIGURATION ---
-// Correction : Utilisation d'une chaîne vide pour la compatibilité avec l'environnement
 const apiKey = ""; 
 
 // --- GEMINI HELPER ---
@@ -1037,3 +1036,4 @@ export default function ContentStrategyApp() {
       </div>
     </div>
   );
+}
