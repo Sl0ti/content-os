@@ -4,14 +4,19 @@ import {
   ArrowRight, RotateCcw, Youtube, BarChart2, Save, Layout, 
   ChevronRight, Settings, Plus, Trash2, ExternalLink, Menu, X,
   Library, Home, Activity, Sparkles, Brain, Loader, Lightbulb, Info,
-  TrendingUp, Target, Eye, MousePointer
+  TrendingUp, Target, Eye, MousePointer, Search, CalendarDays
 } from 'lucide-react';
 
 // --- API CONFIGURATION ---
+// Note: En local avec Vite, vous pouvez utiliser import.meta.env.VITE_GEMINI_API_KEY
 const apiKey = ""; 
 
 // --- GEMINI HELPER ---
 const callGemini = async (prompt) => {
+  if (!apiKey) {
+    console.error("API Key is missing");
+    return null;
+  }
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
@@ -74,6 +79,14 @@ const addDays = (date, days) => {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
+};
+
+const getDaysSince = (dateString) => {
+  if (!dateString) return null;
+  const past = new Date(dateString);
+  const now = new Date();
+  const diffTime = Math.abs(now - past);
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
 };
 
 // --- COMPONENTS ---
@@ -187,11 +200,11 @@ const LandingPage = ({ onSelectMode }) => (
         <Layout className="text-[#37352F]" size={48} />
       </div>
       <h1 className={`${STYLES.fontSerif} text-5xl md:text-6xl font-bold ${STYLES.textMain} tracking-tight`}>
-        Content Strategy OS <span className="text-[#9D34DA] text-2xl align-top">v3</span>
+        Content Strategy OS <span className="text-[#9D34DA] text-2xl align-top">v5</span>
       </h1>
       <p className={`${STYLES.textLight} text-xl max-w-2xl mx-auto leading-relaxed`}>
         Central Command for Content Creation. <br/>
-        <b>The Oracle</b> is now online.
+        <b>The Oracle</b> learns from your history.
       </p>
     </div>
 
@@ -209,7 +222,7 @@ const LandingPage = ({ onSelectMode }) => (
         <h2 className="text-2xl font-bold text-[#37352F] mb-2">The Oracle & Gates</h2>
         <p className="text-[#787774]">
           Analyze volume, variety, and fandom. <br/>
-          <b>New:</b> Auto-saves to library with Virality Score.
+          <b>Fixed:</b> Input name first for accurate predictions.
         </p>
       </button>
 
@@ -234,15 +247,13 @@ const LandingPage = ({ onSelectMode }) => (
 );
 
 const FormatDecider = ({ settings, library, setLibrary }) => {
-  const [mode, setMode] = useState('manual');
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState('NAME_INPUT'); 
+  const [franchiseName, setFranchiseName] = useState("");
   const [data, setData] = useState({ episodes: 0, length: 20, mediaType: 'tv' }); 
   const [result, setResult] = useState(null);
   
-  // AI States
-  const [franchiseName, setFranchiseName] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiResult, setAiResult] = useState(null);
+  const [aiAnalysis, setAiAnalysis] = useState(null); 
   const [showAutoFill, setShowAutoFill] = useState(false);
   const [autoFillQuery, setAutoFillQuery] = useState("");
 
@@ -250,99 +261,89 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
 
   const reset = () => { 
     setResult(null); 
-    setAiResult(null);
-    setStep(0); 
+    setAiAnalysis(null);
+    setStep('NAME_INPUT'); 
     setData({episodes:0, length:20, mediaType: 'tv'});
-    setMode('manual');
     setFranchiseName("");
-    setShowAutoFill(false);
   };
 
-  const handleAutoFill = async () => {
-    if (!autoFillQuery) return;
+  const getHistoryContext = () => {
+    const history = library
+      .filter(i => i.performance.views)
+      .map(i => `- ${i.title} (${i.format}): ${i.performance.views} views`)
+      .join('\n');
+    return history ? `USER HISTORY (Use this to tailor advice):\n${history}` : "No history yet.";
+  };
+
+  const handleNameSubmit = async () => {
+    if (!franchiseName) return;
+    setStep(0); 
+    
     setAiLoading(true);
-    const prompt = `Return a JSON object with one key: "count", which is the total number of ${data.mediaType === 'tv' ? 'episodes' : 'movies'} for the franchise "${autoFillQuery}". Include main-line entries. Return ONLY the number in JSON.`;
+    const historyContext = getHistoryContext();
+    const prompt = `Analyze the franchise "${franchiseName}".
+    ${historyContext}
+    
+    Return JSON:
+    - title: string (Formal Name)
+    - mediaType: "tv" or "movie"
+    - count: number (estimated total episodes or movies. Include main-line and major spin-offs)
+    - viralityScore: number (0-10 based on current global search interest and meme culture)
+    - trend: "Rising" | "Falling" | "Stable"
+    - fandomVibe: "Debate" or "Chaos"
+    - reasoning: string (Short explanation of virality, referencing user history if relevant)
+    `;
+    
     const res = await callGemini(prompt);
-    if (res && res.count) {
-      setData({ ...data, episodes: res.count });
-      setShowAutoFill(false);
+    if (res) {
+      setAiAnalysis(res);
+      if (data.episodes === 0) {
+        setData(prev => ({ 
+          ...prev, 
+          episodes: res.count, 
+          mediaType: res.mediaType === 'movie' ? 'movie' : 'tv',
+          length: res.mediaType === 'movie' ? 110 : 22
+        }));
+      }
     }
     setAiLoading(false);
   };
 
-  const saveToLibrary = (finalResult, analysisData) => {
-    // Check if already exists to avoid duplicates
-    if (library.some(item => item.title === analysisData.title)) return;
+  const handleMagicWandCount = async () => {
+    setAiLoading(true);
+    const prompt = `Return a JSON object with one key: "count", which is the total number of ${data.mediaType === 'tv' ? 'episodes' : 'movies'} for the franchise "${franchiseName}". Return ONLY the number in JSON.`;
+    const res = await callGemini(prompt);
+    if (res && res.count) {
+      setData({ ...data, episodes: res.count });
+    }
+    setAiLoading(false);
+  };
+
+  const saveToLibrary = (finalResult) => {
+    const entryTitle = aiAnalysis?.title || franchiseName;
+    if (library.some(item => item.title === entryTitle)) return;
 
     const newItem = {
       id: Date.now(),
-      title: analysisData.title,
+      title: entryTitle,
       format: finalResult,
-      episodes: analysisData.count,
-      mediaType: analysisData.mediaType,
-      viralityScore: analysisData.viralityScore || 5,
-      trend: analysisData.trend || 'Stable',
-      reasoning: analysisData.reasoning || "Manual Analysis",
+      episodes: data.episodes || aiAnalysis?.count || 0, 
+      mediaType: data.mediaType === 'tv' ? "TV Show" : "Movie Franchise",
+      viralityScore: aiAnalysis?.viralityScore || 5, 
+      trend: aiAnalysis?.trend || 'Unknown',
+      reasoning: aiAnalysis?.reasoning || "Manual Analysis passed through gates.",
       competitors: [],
-      performance: { views: '', ctr: '' },
+      performance: { views: '', uploadDate: '' },
       link: ''
     };
     setLibrary([newItem, ...library]);
   };
 
-  const runAIAnalysis = async () => {
-    if (!franchiseName) return;
-    setAiLoading(true);
-    
-    // UPDATED PROMPT: ORACLE INCLUDED
-    const prompt = `Analyze the franchise "${franchiseName}".
-    
-    CRITICAL RULES:
-    1. TV Shows > 500 eps -> "ONE SITTING".
-    2. Movie Franchises > 60h runtime -> "ONE SITTING".
-    3. High Variety -> "RANKING".
-    
-    THE ORACLE TASK:
-    Estimate the current "Virality Score" (0-10) based on global search interest/pop culture relevance right now.
-    Identify the Trend Direction (Rising, Falling, Stable).
-    
-    Return JSON:
-    - title: string (Formal Name)
-    - mediaType: "TV Show" or "Movie Franchise"
-    - count: number (estimated total)
-    - viralityScore: number (0-10)
-    - trend: "Rising" | "Falling" | "Stable"
-    - recommendedFormat: "ONE SITTING" or "RANKING"
-    - reasoning: string (2 sentences)
-    `;
-
-    const response = await callGemini(prompt);
-    if (response) {
-      setAiResult(response);
-      setResult(response.recommendedFormat);
-      saveToLibrary(response.recommendedFormat, response);
-    }
-    setAiLoading(false);
-  };
-
-  // MANUAL SAVE WRAPPER
-  const handleManualComplete = (finalFormat) => {
-    setResult(finalFormat);
-    saveToLibrary(finalFormat, {
-      title: "Manual Entry (Rename in Library)",
-      mediaType: data.mediaType === 'tv' ? "TV Show" : "Movie Franchise",
-      count: data.episodes,
-      viralityScore: 5, // Default for manual
-      trend: "Unknown",
-      reasoning: "Manually passed the gates."
-    });
-  };
-
   const steps = [
     {
       title: 'Gate 0: Media Type',
-      question: 'What type of franchise is this?',
-      info: "Films = Marathon de 24h sans dormir (Défi physique). Séries = Marathon de vie (Endurance long terme).",
+      question: `Is ${franchiseName} a Show or Movies?`, 
+      subtext: 'Thresholds are different for Movies and TV.',
       options: [
         { label: 'TV Series / Anime', value: 'next_step', action: () => setData({...data, mediaType: 'tv'}) },
         { label: 'Movie Franchise', value: 'next_step', action: () => setData({...data, mediaType: 'movie', length: 110}) } 
@@ -352,7 +353,6 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
       title: 'Gate 1: Volume',
       question: data.mediaType === 'tv' ? 'Episode Count' : 'Movie Count',
       subtext: data.mediaType === 'tv' ? `Absurd > ${settings.thresholdAbsurd} eps` : `Absurd > 60 movies`, 
-      info: "Volume 'Absurde' = Le concept est la souffrance. Volume 'Normal' = Le concept est l'analyse.",
       input: true,
       next: (val) => {
         const count = parseInt(val);
@@ -380,7 +380,6 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
     {
       title: 'Gate 1: Culture',
       question: 'Cultural Perception',
-      info: "Est-ce connu pour être 'infini' ? (Ex: One Piece). L'intuition du public valide le titre 'One Sitting'.",
       options: [
         { label: 'Legendary Length (One Piece/MCU)', value: 'ONE SITTING' },
         { label: 'Standard Length', value: 'next_step' }
@@ -389,7 +388,6 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
     {
       title: 'Gate 2: Variety',
       question: 'Content Structure',
-      info: "Si répétitif (Pokemon) -> One Sitting. Si varié (Pixar) -> Ranking.",
       options: [
         { label: 'High Variety (Distinct Themes)', value: 'RANKING' },
         { label: 'Repetitive (Same Formula)', value: 'next_step' } 
@@ -414,58 +412,95 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
       if (outcome === 'next_step') {
         setStep(step + 1);
       } else {
-        handleManualComplete(outcome);
+        setResult(outcome);
+        saveToLibrary(outcome);
       }
     }, 0);
   };
 
+  if (step === 'NAME_INPUT') return (
+    <div className="animate-fade-in max-w-xl mx-auto mt-20">
+      <Card className="p-12 text-center">
+        <div className="bg-[#E3E2E0] w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 text-[#37352F]">
+          <Search size={32} />
+        </div>
+        <h2 className={`${STYLES.fontSerif} text-4xl font-bold text-[#37352F] mb-4`}>What are we analyzing?</h2>
+        <p className="text-[#9B9A97] mb-8">Enter the franchise name first. The Oracle will start working in the background.</p>
+        
+        <div className="relative">
+          <input 
+            type="text" 
+            value={franchiseName}
+            onChange={(e) => setFranchiseName(e.target.value)}
+            placeholder="e.g. Dexter, Batman, One Piece..."
+            className="w-full bg-[#F7F7F5] border border-[#E9E9E7] focus:border-[#2383E2] rounded-lg p-4 text-xl font-medium text-[#37352F] outline-none transition-all placeholder-[#D3D1CB]"
+            onKeyDown={(e) => e.key === 'Enter' && handleNameSubmit()}
+            autoFocus
+          />
+          <div className="absolute right-2 top-2">
+            <Button onClick={handleNameSubmit} disabled={!franchiseName}>
+              Start <ArrowRight size={20} />
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
   if (result) return (
     <div className="animate-fade-in flex flex-col items-center justify-center h-full max-w-2xl mx-auto text-center">
       <div className="mb-8 w-full">
-        {aiResult && (
-          <div className="bg-white border border-[#E9E9E7] p-6 rounded-lg mb-8 text-left shadow-sm relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10">
-              <Sparkles size={100} className="text-[#9D34DA]" />
-            </div>
-            
-            <div className="flex justify-between items-start mb-6">
-              <div>
-                <div className="flex items-center gap-2 text-[#9D34DA] mb-1">
-                  <Brain size={18} />
-                  <span className="font-bold text-xs uppercase tracking-wide">The Oracle Analysis</span>
-                </div>
-                <h2 className="text-2xl font-serif font-bold text-[#37352F]">{aiResult.title}</h2>
+        <div className="bg-white border border-[#E9E9E7] p-6 rounded-lg mb-8 text-left shadow-sm relative overflow-hidden transition-all duration-500">
+          <div className="flex justify-between items-start mb-6">
+            <div>
+              <div className="flex items-center gap-2 text-[#9D34DA] mb-1">
+                <Brain size={18} />
+                <span className="font-bold text-xs uppercase tracking-wide">The Oracle Analysis</span>
               </div>
-              <OracleGauge score={aiResult.viralityScore} />
+              <h2 className="text-2xl font-serif font-bold text-[#37352F]">
+                {aiAnalysis ? aiAnalysis.title : franchiseName}
+              </h2>
             </div>
-
-            <div className="grid grid-cols-3 gap-4 mb-6">
-              <div className="bg-[#F7F7F5] p-3 rounded border border-[#E9E9E7]">
-                <div className="text-[#9B9A97] text-xs font-bold uppercase mb-1">Trend</div>
-                <div className="font-medium text-[#37352F] flex items-center gap-1">
-                  {aiResult.trend === 'Rising' ? <TrendingUp size={14} className="text-[#2D755D]"/> : <Activity size={14}/>}
-                  {aiResult.trend}
-                </div>
+            {aiAnalysis ? (
+              <OracleGauge score={aiAnalysis.viralityScore} />
+            ) : (
+              <div className="flex items-center gap-2 text-[#9B9A97] text-sm animate-pulse">
+                <Loader size={16} className="animate-spin"/> Oracle is thinking...
               </div>
-              <div className="bg-[#F7F7F5] p-3 rounded border border-[#E9E9E7]">
-                <div className="text-[#9B9A97] text-xs font-bold uppercase mb-1">Volume</div>
-                <div className="font-medium text-[#37352F]">{aiResult.count} entries</div>
-              </div>
-              <div className="bg-[#F7F7F5] p-3 rounded border border-[#E9E9E7]">
-                <div className="text-[#9B9A97] text-xs font-bold uppercase mb-1">Vibe</div>
-                <div className="font-medium text-[#37352F]">{aiResult.fandomVibe}</div>
-              </div>
-            </div>
-            
-            <div className="bg-[#F4EBF9] p-4 rounded text-sm text-[#37352F] border-l-4 border-[#9D34DA] italic leading-relaxed">
-              "{aiResult.reasoning}"
-            </div>
-            
-            <div className="mt-4 text-center">
-              <Badge color="green">Saved to Library</Badge>
-            </div>
+            )}
           </div>
-        )}
+
+          {aiAnalysis ? (
+            <div className="animate-fade-in">
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="bg-[#F7F7F5] p-3 rounded border border-[#E9E9E7]">
+                  <div className="text-[#9B9A97] text-xs font-bold uppercase mb-1">Trend</div>
+                  <div className="font-medium text-[#37352F] flex items-center gap-1">
+                    {aiAnalysis.trend === 'Rising' ? <TrendingUp size={14} className="text-[#2D755D]"/> : <Activity size={14}/>}
+                    {aiAnalysis.trend}
+                  </div>
+                </div>
+                <div className="bg-[#F7F7F5] p-3 rounded border border-[#E9E9E7]">
+                  <div className="text-[#9B9A97] text-xs font-bold uppercase mb-1">Volume</div>
+                  <div className="font-medium text-[#37352F]">{data.episodes || aiAnalysis.count} eps</div>
+                </div>
+                <div className="bg-[#F7F7F5] p-3 rounded border border-[#E9E9E7]">
+                  <div className="text-[#9B9A97] text-xs font-bold uppercase mb-1">Vibe</div>
+                  <div className="font-medium text-[#37352F]">{aiAnalysis.fandomVibe}</div>
+                </div>
+              </div>
+              <div className="bg-[#F4EBF9] p-4 rounded text-sm text-[#37352F] border-l-4 border-[#9D34DA] italic leading-relaxed">
+                "{aiAnalysis.reasoning}"
+              </div>
+            </div>
+          ) : (
+            <div className="h-32 bg-[#F7F7F5] rounded animate-pulse"></div>
+          )}
+          
+          <div className="mt-4 text-center">
+            <Badge color="green">Saved to Library</Badge>
+          </div>
+        </div>
 
         <h2 className="text-[#9B9A97] text-xs font-bold uppercase tracking-widest mb-4">Recommended Strategy</h2>
         <h1 className={`${STYLES.fontSerif} text-6xl font-bold text-[#37352F] mb-6`}>{result}</h1>
@@ -474,59 +509,71 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
     </div>
   );
 
+  const current = steps[step];
+
   return (
     <div className="max-w-xl mx-auto mt-12 animate-fade-in">
-      <div className="flex gap-4 mb-8 justify-center">
-        <button onClick={() => setMode('manual')} className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${mode === 'manual' ? 'bg-[#37352F] text-white shadow-lg' : 'text-[#9B9A97] hover:text-[#37352F]'}`}>Manual Check</button>
-        <button onClick={() => setMode('ai')} className={`px-4 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${mode === 'ai' ? 'bg-white text-[#9D34DA] shadow-md border border-[#E9E9E7]' : 'text-[#9B9A97] hover:text-[#9D34DA]'}`}><Sparkles size={14} /> The Oracle</button>
+      <div className="mb-8 flex justify-between items-center text-[#9B9A97] text-xs font-bold uppercase tracking-widest">
+        <span>Gate {step}</span> 
+        <span>{step + 1} / {steps.length}</span>
       </div>
-
+      
       <Card className="p-10 relative overflow-hidden">
-        {mode === 'ai' ? (
-          <div className="space-y-6">
-            <div className="text-center mb-8">
-              <h2 className={`${STYLES.fontSerif} text-3xl font-bold text-[#37352F] mb-2`}>Ask The Oracle</h2>
-              <p className="text-[#9B9A97]">Enter a franchise. Get format, volume, and virality score.</p>
-            </div>
-            <div className="relative">
-              <input type="text" value={franchiseName} onChange={(e) => setFranchiseName(e.target.value)} placeholder="e.g. One Piece, MCU..." className="w-full bg-[#F7F7F5] border border-[#E9E9E7] focus:border-[#9D34DA] rounded-lg p-4 text-xl font-medium text-[#37352F] outline-none transition-all placeholder-[#D3D1CB]" onKeyDown={(e) => e.key === 'Enter' && runAIAnalysis()} />
-              <div className="absolute right-2 top-2">
-                <Button onClick={runAIAnalysis} variant="ai" disabled={aiLoading || !franchiseName}>{aiLoading ? <Loader className="animate-spin" size={20} /> : <ArrowRight size={20} />}</Button>
-              </div>
-            </div>
+        {!aiAnalysis && (
+          <div className="absolute top-0 left-0 w-full h-1 bg-[#F1F1EF]">
+            <div className="h-full bg-[#9D34DA] animate-progress"></div>
           </div>
-        ) : (
+        )}
+
+        <h2 className={`text-2xl font-bold text-[#37352F] mb-2 ${STYLES.fontSerif}`}>{current.question}</h2>
+        {current.subtext && <p className="text-[#787774] mb-8">{current.subtext}</p>}
+
+        {current.input ? (
           <>
-            <div className="mb-8 flex justify-between items-center text-[#9B9A97] text-xs font-bold uppercase tracking-widest">
-              <span>Gate {step}</span> 
-              <span>{step + 1} / {steps.length}</span>
-            </div>
-            <div className="flex items-start gap-2 mb-2">
-              <h2 className={`text-2xl font-bold text-[#37352F] ${STYLES.fontSerif}`}>{steps[step].question}</h2>
-              {steps[step].info && <InfoTooltip text={steps[step].info} />}
-            </div>
-            {steps[step].subtext && <p className="text-[#787774] mb-8">{steps[step].subtext}</p>}
-            {steps[step].input ? (
-              <>
-                <div className="relative">
-                  <input type="number" value={data[steps[step].field || 'episodes'] || ''} onChange={(e) => setData({...data, [steps[step].field || 'episodes']: e.target.value})} className="w-full text-5xl font-bold bg-transparent border-b-2 border-[#E9E9E7] focus:border-[#2383E2] outline-none py-2 text-[#37352F] placeholder-[#E3E2E0]" placeholder="0" autoFocus />
-                  {steps[step].title === 'Gate 1: Volume' && (
-                    <div className="absolute right-0 top-2">
-                      {showAutoFill ? (
-                        <div className="flex items-center gap-2 bg-white shadow-lg border border-[#E9E9E7] p-2 rounded-lg animate-fade-in"><input type="text" value={autoFillQuery} onChange={(e) => setAutoFillQuery(e.target.value)} placeholder="e.g. Dexter" className="bg-[#F7F7F5] p-1 rounded text-sm outline-none w-32" onKeyDown={(e) => e.key === 'Enter' && handleAutoFill()} /><button onClick={handleAutoFill} disabled={aiLoading} className="text-[#9D34DA] hover:bg-[#F4EBF9] p-1 rounded">{aiLoading ? <Loader size={14} className="animate-spin"/> : <ArrowRight size={14}/>}</button></div>
-                      ) : (
-                        <button onClick={() => setShowAutoFill(true)} className="flex items-center gap-1 text-xs text-[#9D34DA] bg-[#F4EBF9] px-2 py-1 rounded hover:bg-[#EADCF5] transition-colors"><Sparkles size={12} /> Auto-count?</button>
-                      )}
-                    </div>
-                  )}
+            <div className="relative">
+              <input 
+                type="number" 
+                value={data[current.field || 'episodes'] || ''}
+                onChange={(e) => setData({...data, [current.field || 'episodes']: e.target.value})}
+                className="w-full text-5xl font-bold bg-transparent border-b-2 border-[#E9E9E7] focus:border-[#2383E2] outline-none py-2 text-[#37352F] placeholder-[#E3E2E0]"
+                placeholder="0"
+                autoFocus
+              />
+              
+              {current.title === 'Gate 1: Volume' && (
+                <div className="absolute right-0 top-2">
+                  <button 
+                    onClick={handleMagicWandCount}
+                    disabled={aiLoading}
+                    className="flex items-center gap-2 text-xs text-[#9D34DA] bg-[#F4EBF9] px-3 py-1.5 rounded-full hover:bg-[#EADCF5] transition-colors font-medium border border-[#EADCF5]"
+                  >
+                    {aiLoading ? <Loader size={12} className="animate-spin"/> : <Sparkles size={12} />}
+                    {aiLoading ? "Checking..." : `Ask AI: How many ${data.mediaType === 'tv' ? 'eps' : 'movies'}?`}
+                  </button>
                 </div>
-                {steps[step].field === 'length' && <p className="mt-4 font-mono text-[#787774]">Total: ≈ {calculateHours()} Hours</p>}
-                <div className="mt-8 flex justify-end"><Button onClick={() => handleNext()}>Next <ChevronRight size={16}/></Button></div>
-              </>
-            ) : (
-              <div className="grid gap-3">{steps[step].options.map((opt, i) => (<button key={i} onClick={() => handleNext(opt.value, opt.action)} className="text-left p-4 rounded border border-[#E9E9E7] hover:border-[#2383E2] hover:bg-[#F7F7F5] transition-all"><span className="font-medium text-[#37352F]">{opt.label}</span></button>))}</div>
+              )}
+            </div>
+
+            {current.field === 'length' && (
+              <p className="mt-4 font-mono text-[#787774]">Total: ≈ {calculateHours()} Hours</p>
             )}
+            
+            <div className="mt-8 flex justify-end">
+              <Button onClick={() => handleNext()}>Next <ChevronRight size={16}/></Button>
+            </div>
           </>
+        ) : (
+          <div className="grid gap-3">
+            {current.options.map((opt, i) => (
+              <button 
+                key={i} 
+                onClick={() => handleNext(opt.value, opt.action)}
+                className="text-left p-4 rounded border border-[#E9E9E7] hover:border-[#2383E2] hover:bg-[#F7F7F5] transition-all"
+              >
+                <span className="font-medium text-[#37352F]">{opt.label}</span>
+              </button>
+            ))}
+          </div>
         )}
       </Card>
     </div>
@@ -536,9 +583,11 @@ const FormatDecider = ({ settings, library, setLibrary }) => {
 const LibraryPage = ({ library, setLibrary }) => {
   const [newEntry, setNewEntry] = useState({ title: '', format: 'RANKING', link: '' });
   const [showAdd, setShowAdd] = useState(false);
-  const [expandedId, setExpandedId] = useState(null); // Accordion state
+  const [expandedId, setExpandedId] = useState(null); 
+  const [brainstormItem, setBrainstormItem] = useState(null); 
+  const [aiIdeas, setAiIdeas] = useState(null);
+  const [loadingIdeas, setLoadingIdeas] = useState(false);
   
-  // Competitor State inside library items
   const addCompetitor = (id, url) => {
     if (!url) return;
     setLibrary(library.map(item => 
@@ -560,12 +609,37 @@ const LibraryPage = ({ library, setLibrary }) => {
 
   const addEntry = () => {
     if (!newEntry.title) return;
-    setLibrary([...library, { ...newEntry, id: Date.now(), competitors: [], performance: { views: '', ctr: '' } }]);
+    setLibrary([...library, { ...newEntry, id: Date.now(), competitors: [], performance: { views: '', uploadDate: '' }, viralityScore: 5 }]);
     setNewEntry({ title: '', format: 'RANKING', link: '' });
     setShowAdd(false);
   };
 
   const removeEntry = (id) => setLibrary(library.filter(item => item.id !== id));
+
+  const generateIdeas = async (item) => {
+    setBrainstormItem(item);
+    setLoadingIdeas(true);
+    setAiIdeas(null);
+
+    // Context Injection: What worked?
+    const successfulVids = library.filter(i => i.performance.views && parseInt(i.performance.views) > 100000);
+    const historyString = successfulVids.length > 0 
+      ? `MY HITS: ${successfulVids.map(v => `${v.title} (${v.format})`).join(', ')}` 
+      : "No hit data yet.";
+
+    const prompt = `Generate content ideas for "${item.title}" (${item.format} format).
+    ${historyString} - Adapt style to match my hits if applicable.
+    
+    Return JSON with:
+    - titles: array of 3 clickbaity, high-stakes titles.
+    - hooks: array of 3 opening lines/hooks (first 5 seconds).
+    - thumbnailIdea: string describing a high-CTR thumbnail.
+    `;
+
+    const result = await callGemini(prompt);
+    setAiIdeas(result);
+    setLoadingIdeas(false);
+  };
 
   return (
     <div className="max-w-4xl mx-auto animate-fade-in relative">
@@ -591,6 +665,28 @@ const LibraryPage = ({ library, setLibrary }) => {
         </Card>
       )}
 
+      {/* BRAINSTORM MODAL */}
+      {brainstormItem && (
+        <div className="fixed inset-0 bg-[#37352F]/20 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-2xl max-h-[80vh] overflow-y-auto p-8 relative shadow-2xl">
+            <button onClick={() => setBrainstormItem(null)} className="absolute top-4 right-4 text-[#9B9A97] hover:text-[#37352F]"><X size={24} /></button>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="bg-[#F4EBF9] p-3 rounded-lg text-[#9D34DA]"><Brain size={32} /></div>
+              <div><h2 className="text-2xl font-bold text-[#37352F]">{brainstormItem.title}</h2><Badge color="purple">AI Strategy Session</Badge></div>
+            </div>
+            {loadingIdeas ? (
+              <div className="py-12 text-center text-[#9B9A97] flex flex-col items-center gap-4"><Loader className="animate-spin" size={32} /><p>Gemini is cooking up viral ideas...</p></div>
+            ) : aiIdeas ? (
+              <div className="space-y-8">
+                <div><h3 className="text-xs font-bold uppercase text-[#9B9A97] mb-3 flex items-center gap-2"><Youtube size={14} /> Viral Titles</h3><div className="space-y-2">{aiIdeas.titles.map((t, i) => (<div key={i} className="bg-[#F7F7F5] p-3 rounded text-[#37352F] font-medium border border-[#E9E9E7]">{t}</div>))}</div></div>
+                <div><h3 className="text-xs font-bold uppercase text-[#9B9A97] mb-3 flex items-center gap-2"><Activity size={14} /> Opening Hooks</h3><div className="space-y-3">{aiIdeas.hooks.map((h, i) => (<div key={i} className="text-sm text-[#37352F] leading-relaxed border-l-2 border-[#9D34DA] pl-3 italic">"{h}"</div>))}</div></div>
+                <div><h3 className="text-xs font-bold uppercase text-[#9B9A97] mb-3 flex items-center gap-2"><Film size={14} /> Thumbnail Concept</h3><div className="bg-[#F4EBF9] p-4 rounded text-sm text-[#37352F] border border-[#EADCF5]">{aiIdeas.thumbnailIdea}</div></div>
+              </div>
+            ) : (<div className="text-red-500">Failed to generate.</div>)}
+          </Card>
+        </div>
+      )}
+
       <div className="grid gap-4">
         {library.length === 0 && <div className="text-center py-12 text-[#9B9A97] italic border-2 border-dashed border-[#E9E9E7] rounded-lg">No franchises yet. Use The Oracle to analyze one.</div>}
         
@@ -614,7 +710,7 @@ const LibraryPage = ({ library, setLibrary }) => {
                     <div className="cursor-pointer flex-1" onClick={() => setExpandedId(isExpanded ? null : item.id)}>
                       <h3 className="font-bold text-lg text-[#37352F] flex items-center gap-2">
                         {item.title}
-                        {item.viralityScore && (
+                        {item.viralityScore !== undefined && (
                           <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${item.viralityScore >= 8 ? 'bg-[#EDF3EC] text-[#2D755D]' : 'bg-[#FAEBDD] text-[#D9730D]'}`}>
                             {item.viralityScore}/10
                           </span>
@@ -625,28 +721,37 @@ const LibraryPage = ({ library, setLibrary }) => {
                         {item.episodes && <span className="text-xs text-[#9B9A97] flex items-center">{item.episodes} items</span>}
                       </div>
                     </div>
-                    <button onClick={() => removeEntry(item.id)} className="text-[#D3D1CB] hover:text-[#EB5757] p-2"><Trash2 size={16} /></button>
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => removeEntry(item.id)} className="text-[#D3D1CB] hover:text-[#EB5757] p-2"><Trash2 size={16} /></button>
+                      <button onClick={() => generateIdeas(item)} className="text-[#9D34DA] hover:bg-[#F4EBF9] p-2 rounded"><Sparkles size={16} /></button>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* EXPANDED SECTION */}
               {isExpanded && (
                 <div className="border-t border-[#E9E9E7] p-6 bg-[#FBFBFA]">
                   <div className="grid md:grid-cols-2 gap-8">
-                    {/* COMPETITORS */}
                     <div>
-                      <h4 className="text-xs font-bold uppercase text-[#9B9A97] mb-3 flex items-center gap-2"><Target size={14}/> Intelligence (Competitors)</h4>
+                      <h4 className="text-xs font-bold uppercase text-[#9B9A97] mb-3 flex items-center gap-2"><Target size={14}/> Competitors</h4>
                       <div className="space-y-2 mb-3">
-                        {item.competitors && item.competitors.map((url, i) => (
-                          <div key={i} className="flex items-center justify-between bg-white border border-[#E9E9E7] p-2 rounded text-sm text-[#37352F]">
-                            <a href={url} target="_blank" rel="noreferrer" className="truncate flex-1 hover:text-[#2383E2]">{url}</a>
-                            <button onClick={() => removeCompetitor(item.id, i)} className="text-[#D3D1CB] hover:text-[#EB5757]"><X size={14}/></button>
-                          </div>
-                        ))}
+                        {item.competitors && item.competitors.map((url, i) => {
+                          const compId = getYoutubeId(url);
+                          return (
+                            <div key={i} className="flex items-center justify-between bg-white border border-[#E9E9E7] p-2 rounded text-sm text-[#37352F]">
+                              <div className="flex items-center gap-3 overflow-hidden">
+                                {compId ? (
+                                  <img src={`https://img.youtube.com/vi/${compId}/default.jpg`} className="w-12 h-9 object-cover rounded" alt="comp"/>
+                                ) : <div className="w-12 h-9 bg-gray-200 rounded"/>}
+                                <a href={url} target="_blank" rel="noreferrer" className="truncate hover:text-[#2383E2] text-xs">{url}</a>
+                              </div>
+                              <button onClick={() => removeCompetitor(item.id, i)} className="text-[#D3D1CB] hover:text-[#EB5757]"><X size={14}/></button>
+                            </div>
+                          );
+                        })}
                       </div>
                       <div className="flex gap-2">
-                        <input id={`comp-${item.id}`} type="text" placeholder="Paste video URL" className="flex-1 bg-white border border-[#E9E9E7] rounded px-2 py-1 text-sm outline-none focus:border-[#2383E2]" onKeyDown={(e) => {
+                        <input id={`comp-${item.id}`} type="text" placeholder="YouTube URL" className="flex-1 bg-white border border-[#E9E9E7] rounded px-2 py-1 text-sm outline-none focus:border-[#2383E2]" onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             addCompetitor(item.id, e.target.value);
                             e.target.value = '';
@@ -660,7 +765,6 @@ const LibraryPage = ({ library, setLibrary }) => {
                       </div>
                     </div>
 
-                    {/* PERFORMANCE */}
                     <div>
                       <h4 className="text-xs font-bold uppercase text-[#9B9A97] mb-3 flex items-center gap-2"><BarChart2 size={14}/> Post-Mortem</h4>
                       <div className="grid grid-cols-2 gap-4">
@@ -678,24 +782,23 @@ const LibraryPage = ({ library, setLibrary }) => {
                           </div>
                         </div>
                         <div>
-                          <label className="block text-[10px] uppercase text-[#9B9A97] mb-1">CTR (%)</label>
+                          <label className="block text-[10px] uppercase text-[#9B9A97] mb-1">Upload Date</label>
                           <div className="relative">
-                            <MousePointer size={14} className="absolute left-2 top-2.5 text-[#D3D1CB]" />
+                            <CalendarDays size={14} className="absolute left-2 top-2.5 text-[#D3D1CB]" />
                             <input 
-                              type="text" 
-                              value={item.performance?.ctr || ''} 
-                              onChange={(e) => updatePerformance(item.id, 'ctr', e.target.value)}
-                              placeholder="0.0%" 
+                              type="date" 
+                              value={item.performance?.uploadDate || ''} 
+                              onChange={(e) => updatePerformance(item.id, 'uploadDate', e.target.value)}
                               className="w-full pl-7 pr-2 py-2 bg-white border border-[#E9E9E7] rounded text-sm font-mono focus:border-[#2D755D] outline-none"
                             />
                           </div>
+                          {item.performance?.uploadDate && (
+                            <div className="text-[10px] text-[#787774] mt-1 text-right">
+                              {getDaysSince(item.performance.uploadDate)} days ago
+                            </div>
+                          )}
                         </div>
                       </div>
-                      {item.reasoning && (
-                        <div className="mt-4 p-3 bg-[#F4EBF9] rounded border border-[#EADCF5] text-xs text-[#37352F] italic">
-                          "AI Reason: {item.reasoning}"
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -707,6 +810,9 @@ const LibraryPage = ({ library, setLibrary }) => {
     </div>
   );
 };
+
+// ... (Keep Scheduler, CalendarWidget, SettingsPage, AppShell as they were) ...
+// Included for completeness to avoid errors
 
 const CalendarWidget = ({ lastDate, safeDate, daysRemaining }) => {
   const startDate = new Date(lastDate);
